@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:pose_detection_web_test/camera.screen.dart';
+import 'package:pose_detection_web_test/camera_screen.dart';
 
 void main() {
   runApp(const MainApp());
