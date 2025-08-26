@@ -200,10 +200,10 @@ class SimplePosePainter extends CustomPainter {
       ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke;
 
-    // 랜드마크 점들 그리기
+    // 랜드마크 점들 그리기 (좌우 반전 수정)
     for (final landmark in landmarks) {
       if (landmark.visibility > 0.3) {
-        final x = landmark.x * size.width;
+        final x = (1.0 - landmark.x) * size.width; // 좌우 반전
         final y = landmark.y * size.height;
 
         canvas.drawCircle(Offset(x, y), landmark.visibility * 6, pointPaint);
@@ -237,8 +237,8 @@ class SimplePosePainter extends CustomPainter {
 
         if (start.visibility > 0.3 && end.visibility > 0.3) {
           canvas.drawLine(
-            Offset(start.x * size.width, start.y * size.height),
-            Offset(end.x * size.width, end.y * size.height),
+            Offset((1.0 - start.x) * size.width, start.y * size.height),
+            Offset((1.0 - end.x) * size.width, end.y * size.height),
             paint,
           );
         }
