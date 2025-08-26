@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+    <base href="$FLUTTER_BASE_HREF" />
+
+    <meta charset="UTF-8" />
+    <meta content="IE=Edge" http-equiv="X-UA-Compatible" />
+    <meta name="description" content="A new Flutter project." />
+
+    <!-- iOS meta tags & icons -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta
+      name="apple-mobile-web-app-title"
+      content="mediapipe_channeling_test"
+    />
+    <link rel="apple-touch-icon" href="icons/Icon-192.png" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="favicon.png" />
+
+    <title>mediapipe_channeling_test</title>
+    <link rel="manifest" href="manifest.json" />
+
+    <!-- MediaPipe Web SDK - 라이브러리 로딩만 담당 -->
+    <script type="module">
+      console.log("🔄 Loading MediaPipe SDK...");
+      
+      // 상태 초기화
+      window.MediaPipeLibraryLoaded = false;
+      window.MediaPipeLibraryError = null;
+
+      try {
+        // ES6 모듈 동적 import - 모든 필요한 클래스 로드
+        const { FilesetResolver, HandLandmarker, GestureRecognizer, PoseLandmarker } =
+          await import("https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.14");
+
+        // 전역으로 노출 (라이브러리만 로드, 초기화는 별도)
+        window.MediaPipeTasksVision = {
+          FilesetResolver,
+          HandLandmarker,
+          GestureRecognizer,
+          PoseLandmarker,
+        };
+
+        window.MediaPipeLibraryLoaded = true;
+        
+      } catch (error) {
+        window.MediaPipeLibraryError = error;
+        
+        // Fallback: UMD 방식 시도
+        const script = document.createElement("script");
+        script.src = "https://unpkg.com/@mediapipe/tasks-vision@0.10.14/vision_bundle.js";
+        script.onload = () => {
+          if (typeof MediaPipeTasksVision !== "undefined") {
+            window.MediaPipeTasksVision = MediaPipeTasksVision;
+            window.MediaPipeLibraryLoaded = true;
+          }
+        };
+        script.onerror = () => {
+          window.MediaPipeLibraryError = "All loading methods failed";
+        };
+        document.head.appendChild(script);
+      }
+    </script>
+  </head>
+  <body>
+    <script>
+      // MediaPipe 상태 통합 관리
+      function checkMediaPipeStatus() {
+        if (!window.MediaPipeLibraryLoaded && !window.MediaPipeLibraryError) {
+          setTimeout(checkMediaPipeStatus, 100);
+        }
+      }
+      
+      // 상태 체크 시작
+      checkMediaPipeStatus();
+      
+      // 페이지 떠날 때 MediaPipe 리소스 정리
+      window.addEventListener('beforeunload', function() {
+        if (typeof window.disposeMediaPipe === 'function') {
+          window.disposeMediaPipe();
+        }
+      });
+    </script>
+    <script src="js/mediapipe_web.js" defer></script>
+    <script src="flutter_bootstrap.js" async></script>
+  </body>
+</html>
