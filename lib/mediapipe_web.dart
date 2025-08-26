@@ -313,6 +313,9 @@ class MediaPipeWeb implements MediaPipeInterface {
   @override
   Future<void> dispose() async {
     try {
+      // 최적화된 모드 중단
+      stopOptimizedMode();
+      
       // JavaScript MediaPipe 리소스 정리
       js.context.callMethod('disposeMediaPipe');
     } catch (e) {
@@ -320,64 +323,195 @@ class MediaPipeWeb implements MediaPipeInterface {
     }
 
     _isModelLoaded = false;
+    _lastPerformanceStats = null;
   }
 
   @override
   bool get isModelLoaded => _isModelLoaded;
 
+  /// 최적화된 Web Worker 기반 감지 모드
+  bool _useOptimizedMode = true;
+
+  /// 성능 모니터링
+  Map<String, dynamic>? _lastPerformanceStats;
+  
+  /// 적응형 품질 설정
+  Map<String, dynamic> _adaptiveConfig = {
+    'targetFps': 30,
+    'minConfidence': 0.3,
+    'enableAdaptiveQuality': true,
+  };
+
   @override
   Future<MediaPipeResult> detect() async {
+    if (_useOptimizedMode) {
+      return _detectOptimized();
+    } else {
+      return _detectLegacy();
+    }
+  }
+
+  /// 최적화된 감지 방법 (Web Worker + 캐싱)
+  Future<MediaPipeResult> _detectOptimized() async {
     try {
-      try {
-        // 웹 카메라에서 실시간 프레임 캡처
-        final frameData = js.context.callMethod('captureVideoFrame');
-
-        if (frameData == null) {
-          // 프레임 캡처 실패 시 빈 결과 반환
-          return const MediaPipeResult(
-            success: true,
-            data: {
-              'result': {
-                'landmarks': [],
-                'detected': false,
-                'visibility': 0.0,
-                'validLandmarks': 0,
-              },
-            },
-          );
-        }
-
-        // JavaScript에서 직접 비디오 캡처 및 처리 (가장 안정적)
-        final directResult = js.context.callMethod('detectPoseLandmarksFromVideo');
+      // JavaScript에서 캐시된 결과 가져오기 (데이터 전송 최소화)
+      final cachedResult = js.context.callMethod('getOptimizedDetectionResult');
+      
+      if (cachedResult != null) {
+        final result = json.decode(cachedResult.toString());
         
-        if (directResult != null) {
-          final result = json.decode(directResult.toString());
-          return MediaPipeResult(
-            success: true,
-            data: Map<String, dynamic>.from(result),
-          );
-        }
+        // 성능 통계 업데이트
+        _updatePerformanceTracking();
         
-        throw Exception('No result from JavaScript');
-      } catch (e) {
-        // 에러 시 빈 결과 반환
-        return const MediaPipeResult(
-          success: true,
-          data: {
-            'result': {
-              'landmarks': [],
-              'detected': false,
-              'confidence': 0.0,
-              'validLandmarks': 0,
-            },
-          },
+        return MediaPipeResult(
+          success: result['success'] ?? false,
+          data: result['success'] ? Map<String, dynamic>.from(result) : null,
+          error: result['error'],
         );
       }
+      
+      // 캐시된 결과가 없으면 빈 결과 반환
+      return _getEmptyResult();
+      
+    } catch (e) {
+      debugPrint('Optimized detection error: $e');
+      // 오류 시 레거시 모드로 fallback
+      return _detectLegacy();
+    }
+  }
+
+  /// 레거시 감지 방법 (호환성 유지)
+  Future<MediaPipeResult> _detectLegacy() async {
+    try {
+      // 웹 카메라에서 실시간 프레임 캡처
+      final frameData = js.context.callMethod('captureVideoFrame');
+
+      if (frameData == null) {
+        return _getEmptyResult();
+      }
+
+      // JavaScript에서 직접 비디오 캡처 및 처리
+      final directResult = js.context.callMethod('detectPoseLandmarksFromVideo');
+      
+      if (directResult != null) {
+        final result = json.decode(directResult.toString());
+        return MediaPipeResult(
+          success: true,
+          data: Map<String, dynamic>.from(result),
+        );
+      }
+      
+      throw Exception('No result from JavaScript');
     } catch (e) {
       return MediaPipeResult(
         success: false,
-        error: 'Web pose detection failed: $e',
+        error: 'Legacy pose detection failed: $e',
       );
     }
   }
+  
+  /// 빈 결과 생성 (중복 코드 제거)
+  MediaPipeResult _getEmptyResult() {
+    return const MediaPipeResult(
+      success: true,
+      data: {
+        'result': {
+          'landmarks': [],
+          'detected': false,
+          'visibility': 0.0,
+          'validLandmarks': 0,
+        },
+      },
+    );
+  }
+  
+  /// 성능 추적 및 적응형 품질 조절
+  void _updatePerformanceTracking() {
+    try {
+      final stats = js.context.callMethod('getPerformanceStats');
+      if (stats != null) {
+        _lastPerformanceStats = Map<String, dynamic>.from(stats);
+        
+        // 성능 기반 적응형 설정 조절
+        _adjustQualityBasedOnPerformance();
+      }
+    } catch (e) {
+      // 성능 통계 오류는 무시
+    }
+  }
+  
+  /// 성능 기반 품질 자동 조절
+  void _adjustQualityBasedOnPerformance() {
+    if (_lastPerformanceStats == null) return;
+    
+    final fps = _lastPerformanceStats!['avgFps'] as double? ?? 0.0;
+    final droppedFrames = _lastPerformanceStats!['droppedFrames'] as int? ?? 0;
+    
+    bool needsUpdate = false;
+    
+    // FPS가 목표의 80% 미만이거나 드롭된 프레임이 많으면 품질 낮춤
+    if (fps < _adaptiveConfig['targetFps']! * 0.8 || droppedFrames > 10) {
+      if (_adaptiveConfig['minConfidence']! < 0.7) {
+        _adaptiveConfig['minConfidence'] = 
+            (_adaptiveConfig['minConfidence']! as double) + 0.1;
+        needsUpdate = true;
+      }
+    } 
+    // 성능이 충분하면 품질 높임
+    else if (fps > _adaptiveConfig['targetFps']! * 1.1 && droppedFrames < 3) {
+      if (_adaptiveConfig['minConfidence']! > 0.3) {
+        _adaptiveConfig['minConfidence'] = 
+            (_adaptiveConfig['minConfidence']! as double) - 0.1;
+        needsUpdate = true;
+      }
+    }
+    
+    if (needsUpdate) {
+      js.context.callMethod('updateAdaptiveConfig', [_adaptiveConfig]);
+      debugPrint('Updated adaptive config: ${_adaptiveConfig['minConfidence']}');
+    }
+  }
+  
+  /// 최적화된 모드 시작
+  @override
+  Future<bool> startOptimizedMode() async {
+    try {
+      final result = js.context.callMethod('startOptimizedPoseDetection');
+      _useOptimizedMode = result == true;
+      
+      if (_useOptimizedMode) {
+        debugPrint('✅ Switched to optimized Web Worker mode');
+        
+        // 적응형 설정 초기 적용
+        js.context.callMethod('updateAdaptiveConfig', [_adaptiveConfig]);
+      }
+      
+      return _useOptimizedMode;
+    } catch (e) {
+      debugPrint('Failed to start optimized mode: $e');
+      _useOptimizedMode = false;
+      return false;
+    }
+  }
+  
+  /// 최적화된 모드 중단
+  @override
+  void stopOptimizedMode() {
+    try {
+      js.context.callMethod('stopOptimizedPoseDetection');
+      _useOptimizedMode = false;
+      debugPrint('Stopped optimized mode');
+    } catch (e) {
+      debugPrint('Error stopping optimized mode: $e');
+    }
+  }
+  
+  /// 성능 통계 가져오기
+  @override
+  Map<String, dynamic>? getPerformanceStats() {
+    return _lastPerformanceStats;
+  }
+  
+  /// 사용 중인 모드 확인
+  bool get isUsingOptimizedMode => _useOptimizedMode;
 }

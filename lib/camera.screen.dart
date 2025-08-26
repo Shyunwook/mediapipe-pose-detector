@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:pose_detection_web_test/common/mediapipe_factory.dart';
 import 'package:pose_detection_web_test/common/mediapipe_interface.dart';
+import 'package:pose_detection_web_test/mediapipe_web.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -30,6 +31,15 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Timer? _webImageTimer;
 
+  // 최적화된 처리 모드
+  bool _useOptimizedMode = true;
+  Map<String, dynamic>? _performanceStats;
+
+  // FPS 모니터링
+  int _frameCount = 0;
+  DateTime _lastFpsTime = DateTime.now();
+  double _currentFps = 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -41,6 +51,18 @@ class _CameraScreenState extends State<CameraScreen> {
     cameras = await availableCameras();
     await _initializeCamera();
     await _mediaPipe.initialize();
+
+    // 최적화된 모드 시작 시도
+    if (_useOptimizedMode && _mediaPipe is MediaPipeWeb) {
+      final success = await _mediaPipe.startOptimizedMode();
+      if (success) {
+        debugPrint('✅ Successfully started optimized mode');
+      } else {
+        debugPrint('⚠️ Failed to start optimized mode, using legacy');
+        _useOptimizedMode = false;
+      }
+    }
+
     setState(() {});
   }
 
@@ -98,19 +120,34 @@ class _CameraScreenState extends State<CameraScreen> {
 
   void _startImageStream() {
     if (_controller != null && _controller!.value.isInitialized) {
-      // 웹: JavaScript 실시간 처리로 변경 (더 효율적)
-      _webImageTimer = Timer.periodic(const Duration(milliseconds: 100), (
-        timer,
-      ) async {
-        // 중복 처리 방지
-        if (!_isProcessing && _isRecording) {
-          try {
-            await _processWebImage(null); // XFile 불필요
-          } catch (e) {
-            // 에러 무시
+      if (_useOptimizedMode) {
+        // 최적화된 모드: 매우 빠른 인터벌로 결과만 가져오기
+        _webImageTimer = Timer.periodic(const Duration(milliseconds: 16), (
+          // ~60 FPS 체크
+          timer,
+        ) async {
+          if (!_isProcessing && _isRecording) {
+            try {
+              await _processOptimizedWeb();
+            } catch (e) {
+              // 에러 무시
+            }
           }
-        }
-      });
+        });
+      } else {
+        // 레거시 모드: 기존 방식
+        _webImageTimer = Timer.periodic(const Duration(milliseconds: 100), (
+          timer,
+        ) async {
+          if (!_isProcessing && _isRecording) {
+            try {
+              await _processWebImage(null);
+            } catch (e) {
+              // 에러 무시
+            }
+          }
+        });
+      }
     }
   }
 
@@ -120,7 +157,43 @@ class _CameraScreenState extends State<CameraScreen> {
     _webImageTimer = null;
   }
 
-  /// 웹용 이미지 처리 함수 (JavaScript 기반)
+  /// 최적화된 웹 처리 (캐시된 결과 사용)
+  Future<void> _processOptimizedWeb() async {
+    if (_isProcessing) return;
+
+    setState(() {
+      _isProcessing = true;
+    });
+
+    try {
+      // 최적화된 방식으로 결과 가져오기 (데이터 전송 최소화)
+      MediaPipeResult result = await _mediaPipe.detect();
+
+      // 결과 처리
+      if (result.success) {
+        _parseResult(result);
+
+        // 성능 통계 업데이트
+        _updateFpsStats();
+
+        // 성능 모니터링 업데이트
+        if (_mediaPipe is MediaPipeWeb) {
+          _performanceStats = _mediaPipe.getPerformanceStats();
+        }
+      } else {
+        _clearAllLandmarks();
+      }
+    } catch (e) {
+      debugPrint('Optimized processing error: $e');
+      _clearAllLandmarks();
+    } finally {
+      setState(() {
+        _isProcessing = false;
+      });
+    }
+  }
+
+  /// 레거시 웹용 이미지 처리 함수 (JavaScript 기반)
   Future<void> _processWebImage(XFile? imageFile) async {
     if (_isProcessing) return;
 
@@ -156,7 +229,7 @@ class _CameraScreenState extends State<CameraScreen> {
     }
 
     final landmarks = resultData['landmarks'] as List<dynamic>?;
-    
+
     if (landmarks != null && landmarks.isNotEmpty) {
       if (!mounted) return;
 
@@ -213,9 +286,75 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  /// FPS 통계 업데이트
+  void _updateFpsStats() {
+    _frameCount++;
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastFpsTime).inMilliseconds;
+
+    if (elapsed >= 1000) {
+      // 1초마다 FPS 계산
+      _currentFps = _frameCount / (elapsed / 1000.0);
+      _frameCount = 0;
+      _lastFpsTime = now;
+    }
+  }
+
+  /// 성능 정보 표시 위젯
+  Widget _buildPerformanceInfo() {
+    if (!_useOptimizedMode) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned(
+      top: 16,
+      right: 16,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'FPS: ${_currentFps.toStringAsFixed(1)}',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+            if (_performanceStats != null) ...[
+              Text(
+                'Worker FPS: ${_performanceStats!['workerFps']?.toStringAsFixed(1) ?? 'N/A'}',
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+              Text(
+                'Dropped: ${_performanceStats!['droppedFrames'] ?? 0}',
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+              Text(
+                'Mode: ${_useOptimizedMode ? 'Optimized' : 'Legacy'}',
+                style: TextStyle(
+                  color: _useOptimizedMode ? Colors.green : Colors.orange,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    // 최적화된 모드 중단
+    if (_useOptimizedMode && _mediaPipe is MediaPipeWeb) {
+      _mediaPipe.stopOptimizedMode();
+    }
+
     _controller?.dispose();
+    _mediaPipe.dispose();
     super.dispose();
   }
 
@@ -249,6 +388,8 @@ class _CameraScreenState extends State<CameraScreen> {
                           size: Size.infinite,
                         ),
                       ),
+                      // 성능 정보 표시
+                      _buildPerformanceInfo(),
                     ],
                   ),
           ),

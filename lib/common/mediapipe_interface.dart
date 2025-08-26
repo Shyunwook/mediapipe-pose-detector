@@ -43,6 +43,15 @@ abstract class MediaPipeInterface {
 
   /// 현재 모델 로딩 상태
   bool get isModelLoaded;
+  
+  /// 최적화된 모드 시작 (Web 전용, 다른 플랫폼에서는 false 반환)
+  Future<bool> startOptimizedMode() async => false;
+  
+  /// 최적화된 모드 중단 (Web 전용, 다른 플랫폼에서는 무시)
+  void stopOptimizedMode() {}
+  
+  /// 성능 통계 가져오기 (Web 전용, 다른 플랫폼에서는 null 반환)
+  Map<String, dynamic>? getPerformanceStats() => null;
 }
 
 /// MediaPipe 설정 옵션
