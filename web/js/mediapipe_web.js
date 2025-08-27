@@ -229,6 +229,8 @@ function startOptimizedRealtimePoseDetection() {
     optimizedAnimationId = requestAnimationFrame(detectPose);
   }
 
+  // 포즈 감지 루프 시작
+  detectPose();
   return true;
 }
 
