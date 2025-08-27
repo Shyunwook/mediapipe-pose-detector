@@ -229,7 +229,6 @@ function startOptimizedRealtimePoseDetection() {
     optimizedAnimationId = requestAnimationFrame(detectPose);
   }
 
-  optimizedAnimationId = requestAnimationFrame(detectPose);
   return true;
 }
 
